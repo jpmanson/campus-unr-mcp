@@ -1,0 +1,425 @@
+"""HTTP client for Campus Virtual FCEIA UNR (Moodle Web Services).
+
+This is a thin, reusable client that authenticates via Moodle's token-based
+authentication (login/token.php) and calls the REST/XML-RPC web service
+endpoint (webservice/rest/server.php). All business logic lives here so the
+CLI and MCP layers are pure adapters.
+"""
+
+from __future__ import annotations
+
+import os
+import ssl
+import time
+import urllib.parse
+import urllib.request
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+
+import httpx
+from dotenv import dotenv_values
+
+DEFAULT_BASE_URL = "https://campusv.fceia.unr.edu.ar/"
+DEFAULT_SERVICE = "moodle_mobile_app"
+
+
+class CampusError(Exception):
+    """Base error for campus API failures."""
+
+
+class AuthenticationError(CampusError):
+    """Login failed."""
+
+
+@dataclass
+class CampusConfig:
+    base_url: str = DEFAULT_BASE_URL
+    username: str = ""
+    password: str = ""
+    service: str = DEFAULT_SERVICE
+    # Pre-obtained token (skip login flow). If empty, client will authenticate.
+    token: str = ""
+    # Allow self-signed certs (common in university deployments)
+    verify_ssl: bool = False
+    timeout: float = 30.0
+
+    @classmethod
+    def from_env(cls, env_path: str | Path | None = None) -> "CampusConfig":
+        """Load config from a .env file or process environment."""
+        vals: dict[str, str | None] = {}
+        if env_path:
+            vals = dotenv_values(env_path)
+        vals = {k: v for k, v in vals.items() if v is not None}  # type: ignore
+
+        base_url = (
+            vals.get("CAMPUS_BASE_URL")
+            or os.environ.get("CAMPUS_BASE_URL")
+            or DEFAULT_BASE_URL
+        )
+        if not base_url.endswith("/"):
+            base_url += "/"
+        username = vals.get("CAMPUS_USER") or os.environ.get("CAMPUS_USER", "")
+        password = vals.get("CAMPUS_PASS") or os.environ.get("CAMPUS_PASS", "")
+        token = vals.get("CAMPUS_TOKEN") or os.environ.get("CAMPUS_TOKEN", "")
+
+        return cls(
+            base_url=base_url,
+            username=username,
+            password=password,
+            token=token,
+        )
+
+
+def _ts_to_iso(ts: int | None | str) -> str | None:
+    """Convert a unix timestamp (int/str) to ISO-8601 or None."""
+    if not ts:
+        return None
+    try:
+        ts_int = int(ts)
+    except (ValueError, TypeError):
+        return None
+    if ts_int == 0:
+        return None
+    return datetime.fromtimestamp(ts_int, tz=timezone.utc).isoformat()
+
+
+class CampusClient:
+    """Authenticated client for Moodle Web Services.
+
+    Usage::
+
+        client = CampusClient(CampusConfig.from_env(".env"))
+        info = client.get_site_info()
+        courses = client.get_courses(info["userid"])
+    """
+
+    def __init__(self, config: CampusConfig):
+        self.config = config
+        self._token: str | None = config.token or None
+        self._userid: int | None = None
+        self._site_info: dict | None = None
+        self._http = httpx.Client(
+            timeout=config.timeout,
+            verify=config.verify_ssl,
+            follow_redirects=True,
+            headers={"User-Agent": "campus-unr-mcp/0.1"},
+        )
+
+    # -- Lifecycle --
+
+    def close(self) -> None:
+        self._http.close()
+
+    def __enter__(self) -> "CampusClient":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+    # -- Auth --
+
+    def login(self) -> str:
+        """Obtain a web service token via login/token.php."""
+        if self._token:
+            return self._token
+        if not self.config.username or not self.config.password:
+            raise AuthenticationError(
+                "No credentials: set CAMPUS_USER/CAMPUS_PASS or provide a token."
+            )
+        url = urllib.parse.urljoin(self.config.base_url, "login/token.php")
+        resp = self._http.post(
+            url,
+            data={
+                "username": self.config.username,
+                "password": self.config.password,
+                "service": self.config.service,
+            },
+        )
+        data = resp.json()
+        if "token" not in data:
+            raise AuthenticationError(
+                f"Login failed: {data.get('error', data)}"
+            )
+        self._token = data["token"]
+        return self._token
+
+    @property
+    def token(self) -> str:
+        if not self._token:
+            self.login()
+        assert self._token is not None
+        return self._token
+
+    # -- Low-level WS call --
+
+    def ws(self, function: str, **params) -> object:
+        """Call a Moodle Web Service function and return parsed JSON."""
+        # Build form data as a flat dict (Moodle accepts bracketed keys)
+        data: dict[str, str] = {
+            "wstoken": self.token,
+            "wsfunction": function,
+            "moodlewsrestformat": "json",
+        }
+        for k, v in params.items():
+            if isinstance(v, list):
+                for i, item in enumerate(v):
+                    data[f"{k}[{i}]"] = str(item)
+            elif isinstance(v, dict):
+                for dk, dv in v.items():
+                    data[f"{k}[{dk}]"] = str(dv)
+            elif v is not None:
+                data[k] = str(v)
+
+        url = urllib.parse.urljoin(
+            self.config.base_url, "webservice/rest/server.php"
+        )
+        resp = self._http.post(url, data=data)
+        data = resp.json()
+
+        if isinstance(data, dict) and "exception" in data:
+            raise CampusError(
+                f"WS error calling {function}: "
+                f"{data.get('errorcode', '?')} - {data.get('message', '?')}"
+            )
+        return data
+
+    # -- High-level convenience methods --
+
+    def get_site_info(self) -> dict:
+        """Get site info including current user details."""
+        info = self.ws("core_webservice_get_site_info")  # type: ignore[assignment]
+        self._site_info = info  # type: ignore[assignment]
+        if isinstance(info, dict):
+            self._userid = info.get("userid")
+        return info  # type: ignore[return-value]
+
+    @property
+    def userid(self) -> int:
+        if self._userid is None:
+            self.get_site_info()
+        assert self._userid is not None
+        return self._userid
+
+    def get_courses(
+        self, userid: int | None = None, include_details: bool = True
+    ) -> list[dict]:
+        """Get courses for a user (default: current user)."""
+        uid = userid or self.userid
+        courses = self.ws("core_enrol_get_users_courses", userid=uid)
+        if not isinstance(courses, list):
+            return []
+        if include_details:
+            for c in courses:
+                _enrich_course(c)
+        return courses
+
+    def get_categories(
+        self, parent: int | None = None, add_subcategories: bool = True
+    ) -> list[dict]:
+        """Get course categories (periods/departments hierarchy)."""
+        params: dict = {}
+        criteria: list[dict] = []
+        if parent is not None:
+            criteria.append({"key": "parent", "value": str(parent)})
+        criteria.append({"key": "visible", "value": "0"})
+        params["addsubcategories"] = int(add_subcategories)
+        if criteria:
+            for i, c in enumerate(criteria):
+                params[f"criteria[{i}][key]"] = c["key"]
+                params[f"criteria[{i}][value]"] = c["value"]
+
+        # The visible=0 trick with criteria doesn't work well; do a plain call
+        params = {"addsubcategories": 1 if add_subcategories else 0}
+        cats = self.ws("core_course_get_categories", **params)
+        if not isinstance(cats, list):
+            return []
+        return cats
+
+    def get_course_contents(self, courseid: int) -> list[dict]:
+        """Get sections and modules (activities/resources) of a course."""
+        result = self.ws("core_course_get_contents", courseid=courseid)
+        return result if isinstance(result, list) else []
+
+    def get_enrolled_users(self, courseid: int) -> list[dict]:
+        """Get all enrolled users in a course with their roles."""
+        users = self.ws("core_enrol_get_enrolled_users", courseid=courseid)
+        return users if isinstance(users, list) else []
+
+    def get_groups(self, courseid: int) -> list[dict]:
+        """Get groups in a course."""
+        groups = self.ws("core_group_get_course_groups", courseid=courseid)
+        return groups if isinstance(groups, list) else []
+
+    def get_group_members(self, groupid: int) -> list[dict]:
+        """Get members of a specific group."""
+        result = self.ws("core_group_get_groups", **{"groups[0]": groupid})
+        return result if isinstance(result, list) else []
+
+    def get_course_groups_with_members(self, courseid: int) -> list[dict]:
+        """Get groups with their member count and member list."""
+        groups = self.get_groups(courseid)
+        if not groups:
+            return []
+        # Get all members
+        group_ids = [g["id"] for g in groups]
+        params = {}
+        for i, gid in enumerate(group_ids):
+            params[f"groups[{i}]"] = gid
+        members_data = self.ws("core_group_get_groups_members", **params)
+        # Build member map
+        member_map: dict[int, list[dict]] = {}
+        if isinstance(members_data, list):
+            for entry in members_data:
+                gid = entry.get("groupid")
+                member_map.setdefault(gid, []).append(
+                    {
+                        "id": entry.get("id"),
+                        "username": entry.get("username"),
+                        "fullname": entry.get("fullname"),
+                    }
+                )
+        for g in groups:
+            g["members"] = member_map.get(g["id"], [])
+            g["member_count"] = len(g["members"])
+        return groups
+
+    # -- Activities --
+
+    def get_course_activities(self, courseid: int) -> dict:
+        """Get all activities in a course, grouped by type.
+
+        Returns dict with keys: quizzes, assignments, forums, resources, etc.
+        Each is a list of activity dicts with id, name, instance, section.
+        """
+        contents = self.get_course_contents(courseid)
+        by_type: dict[str, list[dict]] = {}
+        for section in contents:
+            for mod in section.get("modules", []):
+                modtype = mod.get("modname", "unknown")
+                entry = {
+                    "id": mod.get("id"),
+                    "instance": mod.get("instance"),
+                    "name": mod.get("name"),
+                    "modname": modtype,
+                    "section": section.get("name"),
+                    "section_id": section.get("id"),
+                    "visible": section.get("visible", 1) == 1
+                    and mod.get("visible", 1) == 1,
+                    "url": mod.get("url"),
+                }
+                by_type.setdefault(modtype, []).append(entry)
+        return by_type
+
+    def get_assignments(self, courseid: int) -> list[dict]:
+        """Get assignments (TP/entregas) in a course with submission/grade info."""
+        # Get assignment instances from course contents
+        activities = self.get_course_activities(courseid)
+        assigns = activities.get("assign", [])
+        if not assigns:
+            return []
+        # Enrich with details
+        for a in assigns:
+            inst = a.get("instance")
+            if not inst:
+                continue
+            # Get submissions count
+            try:
+                sub_data = self.ws(
+                    "mod_assign_get_submissions", **{"assignmentids[0]": inst}
+                )
+                if isinstance(sub_data, dict):
+                    for sa in sub_data.get("assignments", []):
+                        subs = sa.get("submissions", [])
+                        a["submission_count"] = len(subs)
+            except CampusError:
+                a["submission_count"] = None
+            # Get grades count
+            try:
+                grade_data = self.ws(
+                    "mod_assign_get_grades", **{"assignmentids[0]": inst}
+                )
+                if isinstance(grade_data, dict):
+                    for ga in grade_data.get("assignments", []):
+                        grades = ga.get("grades", [])
+                        a["graded_count"] = len(
+                            [g for g in grades if float(g.get("grade", -1)) >= 0]
+                        )
+            except CampusError:
+                a["graded_count"] = None
+        return assigns
+
+    def get_assignment_submissions(self, assignmentid: int) -> list[dict]:
+        """Get submissions for a specific assignment."""
+        data = self.ws(
+            "mod_assign_get_submissions", **{"assignmentids[0]": assignmentid}
+        )
+        if not isinstance(data, dict):
+            return []
+        subs: list[dict] = []
+        for a in data.get("assignments", []):
+            for s in a.get("submissions", []):
+                subs.append(s)
+        return subs
+
+    # -- Grades --
+
+    def get_grades_report(
+        self, courseid: int, userid: int | None = None
+    ) -> list[dict]:
+        """Get grade items for a course (all students or one).
+
+        Returns a list of user grade entries.
+        """
+        params: dict = {"courseid": courseid}
+        if userid is not None:
+            params["userid"] = userid
+        data = self.ws("gradereport_user_get_grade_items", **params)
+        if not isinstance(data, dict):
+            return []
+        return data.get("usergrades", [])
+
+    def get_calendar_events(
+        self,
+        courseids: list[int] | None = None,
+        timestart: int | None = None,
+        timeend: int | None = None,
+    ) -> list[dict]:
+        """Get calendar events (exámenes, parciales, deadlines).
+
+        Args:
+            courseids: Optional list of course IDs to filter.
+            timestart: Optional unix timestamp lower bound.
+            timeend: Optional unix timestamp upper bound.
+        """
+        params: dict = {}
+        if courseids:
+            for i, cid in enumerate(courseids):
+                params[f"courseids[{i}]"] = cid
+        events_filter: dict = {}
+        if timestart is not None:
+            events_filter["eventtype"] = "all"
+        data = self.ws("core_calendar_get_calendar_events", **params)
+        if not isinstance(data, dict):
+            return []
+        return data.get("events", [])
+
+
+# -- Helpers --
+
+def _enrich_course(c: dict) -> None:
+    """Add ISO date fields and role short-names to a course dict (in-place)."""
+    c["startdate_iso"] = _ts_to_iso(c.get("startdate"))
+    c["enddate_iso"] = _ts_to_iso(c.get("enddate"))
+    roles = c.get("roles", [])
+    if isinstance(roles, list):
+        c["role_shortnames"] = [
+            r.get("shortname") for r in roles if isinstance(r, dict)
+        ]
+    else:
+        c["role_shortnames"] = []
+
+
+def ts_to_iso(ts: int | None | str) -> str | None:
+    """Public helper to format timestamps."""
+    return _ts_to_iso(ts)
