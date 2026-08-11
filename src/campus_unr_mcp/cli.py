@@ -442,6 +442,98 @@ def quiz_attempts(quiz_id: int, user_id: int, as_json: bool) -> None:
 
 
 @main.command()
+@click.argument("forum_id", type=int)
+@click.argument("subject")
+@click.argument("message")
+@click.option("--dry-run/--no-dry-run", default=True, help="Validate without posting (default)")
+def post_discussion(forum_id: int, subject: str, message: str, dry_run: bool) -> None:
+    """Create a discussion (tema) in a forum."""
+    with _get_client() as c:
+        result = c.create_forum_discussion(forum_id, subject, message, dry_run=dry_run)
+    if dry_run:
+        console.print(f"[yellow]DRY RUN[/yellow] Validated: {result['validated']}")
+    elif result.get("discussionid"):
+        console.print(f"[green]Created discussion {result['discussionid']}[/green]")
+    else:
+        console.print(f"[red]Error: {result.get('error')}[/red]")
+
+
+@main.command()
+@click.argument("post_id", type=int)
+@click.argument("subject")
+@click.argument("message")
+@click.option("--dry-run/--no-dry-run", default=True, help="Validate without posting (default)")
+def reply_post(post_id: int, subject: str, message: str, dry_run: bool) -> None:
+    """Reply to a forum post."""
+    with _get_client() as c:
+        result = c.reply_forum_post(post_id, subject, message, dry_run=dry_run)
+    if dry_run:
+        console.print(f"[yellow]DRY RUN[/yellow] Validated: {result['validated']}")
+    elif result.get("postid"):
+        console.print(f"[green]Reply posted as {result['postid']}[/green]")
+    else:
+        console.print(f"[red]Error: {result.get('error')}[/red]")
+
+
+@main.command()
+@click.argument("assignment_id", type=int)
+@click.argument("user_id", type=int)
+@click.argument("grade", type=float)
+@click.option("--feedback", default="", help="Feedback comment")
+@click.option("--dry-run/--no-dry-run", default=True, help="Validate without saving (default)")
+def save_grade(assignment_id: int, user_id: int, grade: float, feedback: str, dry_run: bool) -> None:
+    """Save a grade for a student's assignment (TP)."""
+    with _get_client() as c:
+        result = c.save_assignment_grade(assignment_id, user_id, grade, feedback, dry_run=dry_run)
+    if dry_run:
+        console.print(f"[yellow]DRY RUN[/yellow] Validated: {result['validated']} grade={grade}")
+    elif result.get("saved"):
+        console.print(f"[green]Grade saved: {grade} for user {user_id}[/green]")
+    else:
+        console.print(f"[red]Error: {result.get('error')}[/red]")
+
+
+@main.command()
+@click.argument("user_id", type=int)
+@click.argument("message")
+@click.option("--dry-run/--no-dry-run", default=True, help="Validate without sending (default)")
+def send_message(user_id: int, message: str, dry_run: bool) -> None:
+    """Send an instant message to a user."""
+    with _get_client() as c:
+        result = c.send_message_to_user(user_id, message, dry_run=dry_run)
+    if dry_run:
+        console.print(f"[yellow]DRY RUN[/yellow] Validated: {result['validated']}")
+    elif result.get("msgid"):
+        console.print(f"[green]Message sent (id={result['msgid']})[/green]")
+    else:
+        console.print(f"[red]Error: {result.get('error')}[/red]")
+
+
+@main.command()
+@click.argument("name")
+@click.argument("course_id", type=int)
+@click.argument("timestart")  # ISO datetime or unix timestamp
+@click.option("--description", default="", help="Event description")
+@click.option("--dry-run/--no-dry-run", default=True, help="Validate without creating (default)")
+def create_event(name: str, course_id: int, timestart: str, description: str, dry_run: bool) -> None:
+    """Create a calendar event (fecha de examen, entrega, etc.)."""
+    # Parse timestart
+    import datetime as dt
+    if timestart.isdigit():
+        ts = int(timestart)
+    else:
+        ts = int(dt.datetime.fromisoformat(timestart).timestamp())
+    with _get_client() as c:
+        result = c.create_calendar_event(name, course_id, ts, description, dry_run=dry_run)
+    if dry_run:
+        console.print(f"[yellow]DRY RUN[/yellow] Validated: {result['validated']} at {result.get('timestart_iso','')}")
+    elif result.get("eventid"):
+        console.print(f"[green]Event created (id={result['eventid']})[/green]")
+    else:
+        console.print(f"[red]Error: {result.get('error')}[/red]")
+
+
+@main.command()
 def serve() -> None:
     """Run as MCP stdio server."""
     from .mcp_server import run_server

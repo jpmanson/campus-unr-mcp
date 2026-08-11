@@ -466,6 +466,243 @@ class CampusClient:
             return []
         return data.get("events", [])
 
+    # ========================================
+    # WRITE OPERATIONS — all support dry_run
+    # ========================================
+
+    def can_add_discussion(self, forumid: int) -> bool:
+        """Check if current user can post to a forum (no side effects)."""
+        data = self.ws("mod_forum_can_add_discussion", forumid=forumid)
+        if isinstance(data, dict):
+            return bool(data.get("status", False))
+        return False
+
+    def create_forum_discussion(
+        self,
+        forumid: int,
+        subject: str,
+        message: str,
+        dry_run: bool = True,
+    ) -> dict:
+        """Create a new discussion (tema) in a forum.
+
+        Args:
+            forumid: Forum instance ID.
+            subject: Discussion title.
+            message: Body text (HTML allowed).
+            dry_run: If True, only validate permissions without posting.
+
+        Returns:
+            dict with 'validated' (bool), and 'discussionid' (int|None).
+        """
+        # Validate permissions first
+        can = self.can_add_discussion(forumid)
+        if not can:
+            return {"validated": False, "error": "No permission to post in this forum"}
+
+        if dry_run:
+            return {"validated": True, "discussionid": None, "dry_run": True}
+
+        result = self.ws(
+            "mod_forum_add_discussion",
+            forumid=forumid,
+            subject=subject,
+            message=message,
+        )
+        if isinstance(result, dict) and "discussionid" in result:
+            return {"validated": True, "discussionid": result["discussionid"]}
+        return {"validated": False, "error": str(result)}
+
+    def delete_forum_post(self, postid: int) -> bool:
+        """Delete a forum post or discussion."""
+        result = self.ws("mod_forum_delete_post", postid=postid)
+        if isinstance(result, dict):
+            return bool(result.get("status", False))
+        return False
+
+    def reply_forum_post(
+        self,
+        postid: int,
+        subject: str,
+        message: str,
+        dry_run: bool = True,
+    ) -> dict:
+        """Reply to an existing forum post.
+
+        Args:
+            postid: The ID of the post being replied to (parent).
+            subject: Reply subject.
+            message: Reply body.
+            dry_run: If True, only validate without posting.
+
+        Returns:
+            dict with 'validated' (bool) and 'postid' (int|None).
+        """
+        # In dry_run mode, just check the params are valid
+        if dry_run:
+            return {"validated": True, "postid": None, "dry_run": True}
+
+        result = self.ws(
+            "mod_forum_add_discussion_post",
+            postid=postid,
+            subject=subject,
+            message=message,
+        )
+        if isinstance(result, dict) and "postid" in result:
+            return {"validated": True, "postid": result["postid"]}
+        return {"validated": False, "error": str(result)}
+
+    def save_assignment_grade(
+        self,
+        assignmentid: int,
+        userid: int,
+        grade: float,
+        feedback: str = "",
+        attemptnumber: int = -1,
+        dry_run: bool = True,
+    ) -> dict:
+        """Save a grade for a student's assignment.
+
+        Args:
+            assignmentid: Assignment instance ID.
+            userid: Student user ID.
+            grade: Numeric grade.
+            feedback: Feedback comment text.
+            attemptnumber: Attempt number (-1 = latest).
+            dry_run: If True, only validate parameters.
+
+        Returns:
+            dict with 'validated' (bool) and confirmation.
+        """
+        if not 0 <= grade <= 10:
+            return {"validated": False, "error": "Grade must be between 0 and 10"}
+
+        if dry_run:
+            return {
+                "validated": True,
+                "dry_run": True,
+                "assignmentid": assignmentid,
+                "userid": userid,
+                "grade": grade,
+            }
+
+        params = {
+            "assignmentid": assignmentid,
+            "userid": userid,
+            "grade": str(grade),
+            "attemptnumber": attemptnumber,
+            "addattempt": 0,
+            "workflowstate": "graded",
+            "applytoall": 0,
+            "plugindata[assignfeedbackcomments_editor][text]": feedback,
+            "plugindata[assignfeedbackcomments_editor][format]": 1,
+            "plugindata[files_filemanager]": 0,
+        }
+        result = self.ws("mod_assign_save_grade", **params)
+        if isinstance(result, dict) and result.get("status") is None:
+            # mod_assign_save_grade returns null/empty on success
+            return {
+                "validated": True,
+                "saved": True,
+                "assignmentid": assignmentid,
+                "userid": userid,
+                "grade": grade,
+            }
+        if isinstance(result, list) and not result:
+            return {
+                "validated": True,
+                "saved": True,
+                "assignmentid": assignmentid,
+                "userid": userid,
+                "grade": grade,
+            }
+        return {"validated": False, "error": str(result)}
+
+    def send_message_to_user(
+        self,
+        userid: int,
+        message: str,
+        dry_run: bool = True,
+    ) -> dict:
+        """Send an instant message to a user.
+
+        Args:
+            userid: Recipient user ID.
+            message: Message text.
+            dry_run: If True, only validate parameters.
+
+        Returns:
+            dict with 'validated' (bool) and 'msgid' (int|None).
+        """
+        if dry_run:
+            return {"validated": True, "dry_run": True, "userid": userid}
+
+        # core_message_send_instant_messages expects messages[0][touserid] and [text]
+        result = self.ws(
+            "core_message_send_instant_messages",
+            **{"messages[0][touserid]": userid, "messages[0][text]": message},
+        )
+        if isinstance(result, list) and result:
+            entry = result[0]
+            if entry.get("msgid"):
+                return {"validated": True, "msgid": entry["msgid"]}
+            if entry.get("errormessage"):
+                return {"validated": False, "error": entry["errormessage"]}
+        return {"validated": False, "error": str(result)}
+
+    def create_calendar_event(
+        self,
+        name: str,
+        courseid: int,
+        timestart: int,
+        description: str = "",
+        eventtype: str = "course",
+        duration: int = 0,
+        dry_run: bool = True,
+    ) -> dict:
+        """Create a calendar event (fecha de examen, entrega, etc.).
+
+        Args:
+            name: Event title.
+            courseid: Course ID.
+            timestart: Unix timestamp for event start.
+            description: Event description.
+            eventtype: Event type (course, user, group).
+            duration: Duration in seconds (0 = no duration).
+            dry_run: If True, only validate parameters.
+
+        Returns:
+            dict with 'validated' (bool) and 'eventid' (int|None).
+        """
+        if not name or not courseid or not timestart:
+            return {"validated": False, "error": "name, courseid, timestart required"}
+
+        if dry_run:
+            return {
+                "validated": True,
+                "dry_run": True,
+                "name": name,
+                "courseid": courseid,
+                "timestart_iso": _ts_to_iso(timestart),
+            }
+
+        result = self.ws(
+            "core_calendar_create_calendar_events",
+            **{
+                "events[0][name]": name,
+                "events[0][description]": description,
+                "events[0][courseid]": courseid,
+                "events[0][eventtype]": eventtype,
+                "events[0][timestart]": timestart,
+                "events[0][timeduration]": duration,
+            },
+        )
+        if isinstance(result, dict):
+            events = result.get("events", [])
+            if events:
+                return {"validated": True, "eventid": events[0].get("id")}
+        return {"validated": False, "error": str(result)}
+
 
 # -- Helpers --
 

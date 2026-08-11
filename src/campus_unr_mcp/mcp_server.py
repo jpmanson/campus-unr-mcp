@@ -396,6 +396,138 @@ def _ts_to_iso(ts) -> str | None:
     return ts_to_iso(ts)
 
 
+# ========================================
+# WRITE TOOLS — dry_run=True by default
+# ========================================
+
+@mcp.tool()
+def create_forum_discussion(
+    forum_id: int, subject: str, message: str, dry_run: bool = True
+) -> str:
+    """Create a new discussion (tema) in a forum.
+
+    By default runs in dry_run mode (validates permissions only).
+    Set dry_run=False to actually post.
+
+    Args:
+        forum_id: Forum instance ID (use list_forums to get it).
+        subject: Discussion title.
+        message: Body text (HTML allowed).
+        dry_run: If True (default), validate without posting.
+
+    Returns: JSON with validated status, and discussionid if posted.
+    """
+    c = _get_client()
+    result = c.create_forum_discussion(forum_id, subject, message, dry_run=dry_run)
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def reply_forum_post(
+    post_id: int, subject: str, message: str, dry_run: bool = True
+) -> str:
+    """Reply to an existing forum post.
+
+    By default runs in dry_run mode. Set dry_run=False to actually post.
+
+    Args:
+        post_id: The ID of the post being replied to (parent).
+        subject: Reply subject.
+        message: Reply body text.
+        dry_run: If True (default), validate without posting.
+
+    Returns: JSON with validated status, and postid if posted.
+    """
+    c = _get_client()
+    result = c.reply_forum_post(post_id, subject, message, dry_run=dry_run)
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def save_assignment_grade(
+    assignment_id: int,
+    user_id: int,
+    grade: float,
+    feedback: str = "",
+    dry_run: bool = True,
+) -> str:
+    """Save a grade for a student's assignment (TP).
+
+    By default runs in dry_run mode. Set dry_run=False to actually save.
+
+    Args:
+        assignment_id: Assignment instance ID.
+        user_id: Student user ID.
+        grade: Numeric grade (0-10).
+        feedback: Optional feedback comment text.
+        dry_run: If True (default), validate without saving.
+
+    Returns: JSON with validated status and confirmation.
+    """
+    c = _get_client()
+    result = c.save_assignment_grade(
+        assignment_id, user_id, grade, feedback, dry_run=dry_run
+    )
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def send_message_to_user(
+    user_id: int, message: str, dry_run: bool = True
+) -> str:
+    """Send an instant message to a user.
+
+    By default runs in dry_run mode. Set dry_run=False to actually send.
+
+    Args:
+        user_id: Recipient user ID.
+        message: Message text.
+        dry_run: If True (default), validate without sending.
+
+    Returns: JSON with validated status and msgid if sent.
+    """
+    c = _get_client()
+    result = c.send_message_to_user(user_id, message, dry_run=dry_run)
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def create_calendar_event(
+    name: str,
+    course_id: int,
+    timestart: str,
+    description: str = "",
+    eventtype: str = "course",
+    dry_run: bool = True,
+) -> str:
+    """Create a calendar event (fecha de examen, entrega, etc.).
+
+    By default runs in dry_run mode. Set dry_run=False to actually create.
+
+    Args:
+        name: Event title.
+        course_id: Course ID.
+        timestart: ISO datetime (e.g. "2026-12-15T10:00:00") or unix timestamp.
+        description: Optional event description.
+        eventtype: Event type (course, user, group). Default: course.
+        dry_run: If True (default), validate without creating.
+
+    Returns: JSON with validated status and eventid if created.
+    """
+    import datetime as dt
+
+    if timestart.isdigit():
+        ts = int(timestart)
+    else:
+        ts = int(dt.datetime.fromisoformat(timestart).timestamp())
+
+    c = _get_client()
+    result = c.create_calendar_event(
+        name, course_id, ts, description, eventtype, dry_run=dry_run
+    )
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
 def run_server() -> None:
     """Entry point for the MCP stdio server."""
     mcp.run(transport="stdio")
