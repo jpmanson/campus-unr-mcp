@@ -68,23 +68,42 @@ uv run campus serve
 
 ## Uso como servidor MCP en Hermes
 
-Agregar a `~/.hermes/config.yaml`:
+Las credenciales viven en el `.env` del repo (no en `config.yaml`). Con
+`uv --directory <ruta-del-repo>`, el cwd del proceso es el repo y se lee ese `.env`.
+
+En `~/.hermes/config.yaml` (ajustá la ruta al clone local):
 
 ```yaml
 mcp_servers:
-  campus-unr:
-    command: "uv"
+  campus_unr:
+    command: uv
     args:
-      - "--directory"
-      - "/Users/jpmanson/Development/campus-unr-mcp"
-      - "run"
-      - "campus"
-      - "serve"
+      - --directory
+      - /path/to/campus-unr-mcp
+      - run
+      - campus
+      - serve
+    connect_timeout: 90.0
+    enabled: true
     timeout: 120
-    connect_timeout: 60
 ```
 
-Reiniciar Hermes para que descubra las tools.
+O por CLI (sin pasar flags de Hermes como `--connect-timeout` en `--args`;
+si no, caen como argumentos de `campus serve` y el server falla):
+
+```bash
+uv sync
+printf 'Y\n' | hermes mcp add campus_unr --command uv \
+  --args --directory /path/to/campus-unr-mcp run campus serve
+hermes config set mcp_servers.campus_unr.timeout 120
+hermes config set mcp_servers.campus_unr.connect_timeout 90
+hermes config set mcp_servers.campus_unr.enabled true
+# Si args quedó como string JSON, dejalo como lista YAML real (como arriba).
+hermes mcp test campus_unr
+```
+
+Reiniciá la sesión CLI / el gateway de Hermes para descubrir las tools
+(en Telegram hace falta reiniciar el gateway).
 
 ## Tools MCP disponibles
 
