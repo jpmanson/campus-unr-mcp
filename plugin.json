@@ -1,0 +1,12 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "campus-unr-mcp",
+  "version": "0.1.0",
+  "description": "MCP server + CLI for Campus Virtual FCEIA UNR (Moodle). Docente tools: courses, enrollments, activities, grades, assignments.",
+  "author": {
+    "name": "Juan Pablo Manson"
+  },
+  "repository": "https://github.com/jpmanson/campus-unr-mcp",
+  "license": "MIT",
+  "keywords": ["moodle", "campus", "fceia", "unr", "education", "docente", "mcp"]
+}

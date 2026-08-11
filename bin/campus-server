@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Plugin-relative launcher for campus-unr-mcp MCP stdio server.
+# Resolves uv via PATH, then runs the installed CLI entrypoint.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Try uv first (preferred), fall back to python -m
+if command -v uv &>/dev/null; then
+    exec uv run --directory "$SCRIPT_DIR" campus serve
+elif command -v python3 &>/dev/null; then
+    cd "$SCRIPT_DIR"
+    exec python3 -m campus_unr_mcp serve
+else
+    echo "Error: neither 'uv' nor 'python3' found in PATH" >&2
+    exit 1
+fi
