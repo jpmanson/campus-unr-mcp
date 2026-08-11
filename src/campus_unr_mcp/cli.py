@@ -298,6 +298,150 @@ def grades(course_id: int, as_json: bool) -> None:
 
 
 @main.command()
+@click.argument("course_id", type=int)
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def forums(course_id: int, as_json: bool) -> None:
+    """List forums in a course with discussion counts."""
+    with _get_client() as c:
+        forums_list = c.get_forums(course_id)
+    if as_json:
+        _print_json(forums_list)
+        return
+    if not forums_list:
+        console.print("[yellow]No hay foros.[/yellow]")
+        return
+    table = Table(title=f"Foros (curso {course_id})")
+    table.add_column("ID", style="dim")
+    table.add_column("Nombre", style="cyan")
+    table.add_column("cmid", style="dim")
+    table.add_column("Discusiones", justify="right")
+    for f in forums_list:
+        table.add_row(
+            str(f.get("id")),
+            str(f.get("name", "")),
+            str(f.get("cmid", "")),
+            str(f.get("numdiscussions", 0)),
+        )
+    console.print(table)
+
+
+@main.command()
+@click.argument("forum_id", type=int)
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def discussions(forum_id: int, as_json: bool) -> None:
+    """List discussions (temas) in a forum."""
+    with _get_client() as c:
+        discussions_list = c.get_forum_discussions(forum_id)
+    if as_json:
+        _print_json(discussions_list)
+        return
+    if not discussions_list:
+        console.print("[yellow]No hay discusiones.[/yellow]")
+        return
+    table = Table(title=f"Discusiones (foro {forum_id})")
+    table.add_column("ID", style="dim")
+    table.add_column("Tema")
+    table.add_column("Autor", style="cyan")
+    table.add_column("Respuestas", justify="right")
+    table.add_column("Modificado", style="dim")
+    for d in discussions_list:
+        from .client import ts_to_iso
+
+        table.add_row(
+            str(d.get("discussion")),
+            str(d.get("name", "")),
+            str(d.get("userfullname", "")),
+            str(d.get("numreplies", 0)),
+            str(ts_to_iso(d.get("modified")) or ""),
+        )
+    console.print(table)
+
+
+@main.command()
+@click.argument("course_id", type=int)
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def group_members(course_id: int, as_json: bool) -> None:
+    """List group members (comisiones with student lists)."""
+    with _get_client() as c:
+        groups_data = c.get_groups_with_members(course_id)
+    if as_json:
+        _print_json(groups_data)
+        return
+    if not groups_data:
+        console.print("[yellow]No hay grupos.[/yellow]")
+        return
+    for g in groups_data:
+        console.print(
+            f"\n[bold cyan]{g.get('name')}[/bold cyan] "
+            f"({g.get('member_count', 0)} miembros)"
+        )
+        for m in (g.get("members") or [])[:10]:
+            roles_str = ",".join(m.get("roles", []))
+            console.print(f"  {m.get('fullname')} [dim]({roles_str})[/dim]")
+        total = g.get("member_count", 0)
+        if total > 10:
+            console.print(f"  [dim]... y {total - 10} más[/dim]")
+
+
+@main.command()
+@click.argument("course_id", type=int)
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def course_grades(course_id: int, as_json: bool) -> None:
+    """Get all grade items for a course (quizzes + assignments)."""
+    with _get_client() as c:
+        grades_data = c.get_course_grades(course_id)
+    if as_json:
+        _print_json(grades_data)
+        return
+    if not grades_data:
+        console.print("[yellow]No hay datos de calificaciones.[/yellow]")
+        return
+    console.print(f"[bold]Calificaciones (curso {course_id})[/bold]")
+    console.print(f"Usuarios con items: {len(grades_data)}")
+    if grades_data:
+        items = grades_data[0].get("gradeitems", [])
+        console.print(f"\n[dim]Items de calificación ({len(items)}):[/dim]")
+        for gi in items:
+            console.print(
+                f"  - {gi.get('itemname', '(curso)')} "
+                f"({gi.get('itemtype')}/{gi.get('itemmodule', '')})"
+            )
+
+
+@main.command()
+@click.argument("quiz_id", type=int)
+@click.option("--user-id", type=int, default=0, help="Filter by user (0=self)")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def quiz_attempts(quiz_id: int, user_id: int, as_json: bool) -> None:
+    """List attempts for a quiz (parcial/examen)."""
+    with _get_client() as c:
+        attempts = c.get_quiz_attempts(quiz_id, user_id)
+    if as_json:
+        _print_json(attempts)
+        return
+    if not attempts:
+        console.print("[yellow]No hay intentos.[/yellow]")
+        return
+    table = Table(title=f"Intentos (quiz {quiz_id})")
+    table.add_column("ID", style="dim")
+    table.add_column("Usuario")
+    table.add_column("Intento", justify="right")
+    table.add_column("Estado", style="cyan")
+    table.add_column("Nota", justify="right")
+    table.add_column("Inicio", style="dim")
+    for a in attempts:
+        table.add_row(
+            str(a.get("id")),
+            str(a.get("userid", "")),
+            str(a.get("attempt", "")),
+            str(a.get("state", "")),
+            str(a.get("sumgrades", "")),
+            str(a.get("timestart", "")),
+        )
+    console.print(table)
+
+
+@main.command()
 def serve() -> None:
     """Run as MCP stdio server."""
     from .mcp_server import run_server

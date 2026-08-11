@@ -251,37 +251,20 @@ class CampusClient:
         groups = self.ws("core_group_get_course_groups", courseid=courseid)
         return groups if isinstance(groups, list) else []
 
-    def get_group_members(self, groupid: int) -> list[dict]:
-        """Get members of a specific group."""
-        result = self.ws("core_group_get_groups", **{"groups[0]": groupid})
-        return result if isinstance(result, list) else []
+    def get_groups_with_members(self, courseid: int) -> list[dict]:
+        """Get groups with their member lists.
 
-    def get_course_groups_with_members(self, courseid: int) -> list[dict]:
-        """Get groups with their member count and member list."""
+        Builds membership from enrolled users (each user carries a 'groups'
+        array in Moodle WS), then attaches it to each group.
+        """
         groups = self.get_groups(courseid)
         if not groups:
             return []
-        # Get all members
-        group_ids = [g["id"] for g in groups]
-        params = {}
-        for i, gid in enumerate(group_ids):
-            params[f"groups[{i}]"] = gid
-        members_data = self.ws("core_group_get_groups_members", **params)
-        # Build member map
-        member_map: dict[int, list[dict]] = {}
-        if isinstance(members_data, list):
-            for entry in members_data:
-                gid = entry.get("groupid")
-                member_map.setdefault(gid, []).append(
-                    {
-                        "id": entry.get("id"),
-                        "username": entry.get("username"),
-                        "fullname": entry.get("fullname"),
-                    }
-                )
+        member_map = self.get_group_members(courseid)
         for g in groups:
-            g["members"] = member_map.get(g["id"], [])
-            g["member_count"] = len(g["members"])
+            members = member_map.get(g.get("name", ""), [])
+            g["members"] = members
+            g["member_count"] = len(members)
         return groups
 
     # -- Activities --
@@ -378,6 +361,85 @@ class CampusClient:
         if not isinstance(data, dict):
             return []
         return data.get("usergrades", [])
+
+    # -- Forums --
+
+    def get_forums(self, courseid: int) -> list[dict]:
+        """List forums in a course with discussion counts."""
+        data = self.ws(
+            "mod_forum_get_forums_by_courses", **{"courseids[0]": courseid}
+        )
+        return data if isinstance(data, list) else []
+
+    def get_forum_discussions(self, forumid: int) -> list[dict]:
+        """List discussions (temas) in a forum, including message content."""
+        data = self.ws(
+            "mod_forum_get_forum_discussions",
+            forumid=forumid,
+        )
+        if not isinstance(data, dict):
+            return []
+        return data.get("discussions", [])
+
+    def get_forum_discussion_posts(self, discussionid: int) -> list[dict]:
+        """Get posts (respuestas) in a discussion thread."""
+        data = self.ws(
+            "mod_forum_get_forum_discussion_posts", discussionid=discussionid
+        )
+        if not isinstance(data, dict):
+            return []
+        return data.get("posts", [])
+
+    # -- Quiz --
+
+    def get_quiz_attempts(self, quizid: int, userid: int = 0) -> list[dict]:
+        """Get attempts for a quiz (userid=0 = current user only)."""
+        data = self.ws(
+            "mod_quiz_get_user_attempts", quizid=quizid, userid=userid
+        )
+        if not isinstance(data, dict):
+            return []
+        return data.get("attempts", [])
+
+    def get_course_grades(self, courseid: int) -> list[dict]:
+        """Get all grade items for a course via the grade report.
+
+        Each entry has userid, fullname, and gradeitems with per-item grades.
+        Use this to get quiz/assignment grades for all students at once.
+        """
+        data = self.ws("gradereport_user_get_grade_items", courseid=courseid)
+        if not isinstance(data, dict):
+            return []
+        return data.get("usergrades", [])
+
+    # -- Groups --
+
+    def get_group_members(self, courseid: int) -> dict[str, list[dict]]:
+        """Build a group-name -> members map from enrolled users.
+
+        Moodle's core_enrol_get_enrolled_users includes a 'groups' array per
+        user, which we invert into a membership map.
+        """
+        users = self.get_enrolled_users(courseid)
+        from collections import defaultdict
+
+        group_map: dict[str, list[dict]] = defaultdict(list)
+        for u in users:
+            roles = [
+                r.get("shortname")
+                for r in u.get("roles", [])
+                if isinstance(r, dict)
+            ]
+            for g in u.get("groups", []):
+                group_map[g.get("name", "?")].append(
+                    {
+                        "userid": u.get("id"),
+                        "fullname": u.get("fullname"),
+                        "email": u.get("email", ""),
+                        "roles": roles,
+                    }
+                )
+        return dict(group_map)
 
     def get_calendar_events(
         self,

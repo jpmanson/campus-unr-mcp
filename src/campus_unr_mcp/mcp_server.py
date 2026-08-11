@@ -23,6 +23,11 @@ _client: CampusClient | None = None
 
 
 def _get_client() -> CampusClient:
+    """Return the cached client, creating it on first use.
+
+    The client persists across tool calls so HTTP connections are reused.
+    It is never closed during a session.
+    """
     global _client
     if _client is None:
         # Try .env in cwd first, then environment variables
@@ -47,8 +52,8 @@ def get_site_info() -> str:
     Returns: JSON with site name, URL, user id, username, full name, and
     available web service functions count.
     """
-    with _get_client() as c:
-        info = c.get_site_info()
+    c = _get_client()
+    info = c.get_site_info()
     return json.dumps(
         {
             "sitename": info.get("sitename"),
@@ -71,8 +76,8 @@ def list_courses() -> str:
     Returns: JSON array of courses with id, shortname, fullname, category,
     start/end dates, and the user's roles in each.
     """
-    with _get_client() as c:
-        courses = c.get_courses()
+    c = _get_client()
+    courses = c.get_courses()
     result = [
         {
             "id": crs.get("id"),
@@ -100,8 +105,8 @@ def list_categories() -> str:
     Returns: JSON array of categories with id, name, parent, depth,
     and course count.
     """
-    with _get_client() as c:
-        cats = c.get_categories()
+    c = _get_client()
+    cats = c.get_categories()
     result = [
         {
             "id": cat.get("id"),
@@ -126,8 +131,8 @@ def get_course_contents(course_id: int) -> str:
     Returns: JSON array of sections, each with a list of modules
     (activities and resources) including type, name, and URL.
     """
-    with _get_client() as c:
-        contents = c.get_course_contents(course_id)
+    c = _get_client()
+    contents = c.get_course_contents(course_id)
     result = [
         {
             "section": section.get("name"),
@@ -161,8 +166,8 @@ def list_enrolled_users(course_id: int, role: str = "") -> str:
 
     Returns: JSON array of users with id, fullname, email, and roles.
     """
-    with _get_client() as c:
-        users = c.get_enrolled_users(course_id)
+    c = _get_client()
+    users = c.get_enrolled_users(course_id)
     if role:
         users = [
             u
@@ -192,8 +197,8 @@ def list_groups(course_id: int) -> str:
 
     Returns: JSON array of groups with id, name, and description.
     """
-    with _get_client() as c:
-        groups = c.get_groups(course_id)
+    c = _get_client()
+    groups = c.get_groups(course_id)
     result = [
         {
             "id": g.get("id"),
@@ -214,8 +219,8 @@ def list_activities(course_id: int) -> str:
 
     Returns: JSON object mapping activity type -> list of activities.
     """
-    with _get_client() as c:
-        activities = c.get_course_activities(course_id)
+    c = _get_client()
+    activities = c.get_course_activities(course_id)
     return json.dumps(activities, ensure_ascii=False, indent=2)
 
 
@@ -228,8 +233,8 @@ def list_assignments(course_id: int) -> str:
 
     Returns: JSON array of assignments with submission and grade counts.
     """
-    with _get_client() as c:
-        assigns = c.get_assignments(course_id)
+    c = _get_client()
+    assigns = c.get_assignments(course_id)
     return json.dumps(assigns, ensure_ascii=False, indent=2)
 
 
@@ -244,8 +249,8 @@ def get_grades_report(course_id: int, user_id: int = 0) -> str:
 
     Returns: JSON with grade items and grades per user.
     """
-    with _get_client() as c:
-        grades = c.get_grades_report(course_id, user_id if user_id else None)
+    c = _get_client()
+    grades = c.get_grades_report(course_id, user_id if user_id else None)
     return json.dumps(grades, ensure_ascii=False, indent=2, default=str)
 
 
@@ -258,9 +263,137 @@ def get_assignment_submissions(assignment_id: int) -> str:
 
     Returns: JSON array of submissions with status, dates, and content.
     """
-    with _get_client() as c:
-        subs = c.get_assignment_submissions(assignment_id)
+    c = _get_client()
+    subs = c.get_assignment_submissions(assignment_id)
     return json.dumps(subs, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def list_forums(course_id: int) -> str:
+    """List forums in a course with discussion counts.
+
+    Args:
+        course_id: The Moodle course ID.
+
+    Returns: JSON array of forums with id, name, cmid, and discussion count.
+    """
+    c = _get_client()
+    forums = c.get_forums(course_id)
+    result = [
+        {
+            "id": f.get("id"),
+            "name": f.get("name"),
+            "cmid": f.get("cmid"),
+            "num_discussions": f.get("numdiscussions", 0),
+        }
+        for f in forums
+    ]
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def list_forum_discussions(forum_id: int) -> str:
+    """List discussions (temas) in a forum, including message content.
+
+    Args:
+        forum_id: The forum instance ID (use list_forums to get it).
+
+    Returns: JSON array of discussions with subject, author, message,
+    reply count, and creation/modification dates.
+    """
+    c = _get_client()
+    discussions = c.get_forum_discussions(forum_id)
+    result = [
+        {
+            "discussion_id": d.get("discussion"),
+            "name": d.get("name"),
+            "subject": d.get("subject"),
+            "author": d.get("userfullname"),
+            "user_id": d.get("userid"),
+            "message": d.get("message"),
+            "num_replies": d.get("numreplies", 0),
+            "created": _ts_to_iso(d.get("created")),
+            "modified": _ts_to_iso(d.get("modified")),
+            "pinned": d.get("pinned", False),
+            "locked": d.get("locked", False),
+        }
+        for d in discussions
+    ]
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def list_group_members(course_id: int) -> str:
+    """List groups (comisiones) with their member lists.
+
+    Args:
+        course_id: The Moodle course ID.
+
+    Returns: JSON array of groups, each with name, member count,
+    and a list of members (userid, fullname, email, roles).
+    """
+    c = _get_client()
+    groups = c.get_groups_with_members(course_id)
+    result = [
+        {
+            "id": g.get("id"),
+            "name": g.get("name"),
+            "member_count": g.get("member_count", 0),
+            "members": g.get("members", []),
+        }
+        for g in groups
+    ]
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def get_course_grades(course_id: int) -> str:
+    """Get all grade items for a course (quizzes, assignments, etc.).
+
+    Returns grade data for every enrolled student, organized by grade item.
+
+    Args:
+        course_id: The Moodle course ID.
+
+    Returns: JSON array of user grade entries with grade items and values.
+    """
+    c = _get_client()
+    grades = c.get_course_grades(course_id)
+    return json.dumps(grades, ensure_ascii=False, indent=2, default=str)
+
+
+@mcp.tool()
+def list_quiz_attempts(quiz_id: int, user_id: int = 0) -> str:
+    """List attempts for a quiz (parcial/examen).
+
+    Args:
+        quiz_id: The quiz instance ID.
+        user_id: Optional user filter (0 = current user only).
+
+    Returns: JSON array of attempts with state, score, and timestamps.
+    """
+    c = _get_client()
+    attempts = c.get_quiz_attempts(quiz_id, user_id)
+    result = [
+        {
+            "id": a.get("id"),
+            "user_id": a.get("userid"),
+            "attempt_number": a.get("attempt"),
+            "state": a.get("state"),
+            "sumgrades": a.get("sumgrades"),
+            "timestart": _ts_to_iso(a.get("timestart")),
+            "timefinish": _ts_to_iso(a.get("timefinish")),
+        }
+        for a in attempts
+    ]
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+def _ts_to_iso(ts) -> str | None:
+    """Convert unix timestamp to ISO-8601."""
+    from .client import ts_to_iso
+
+    return ts_to_iso(ts)
 
 
 def run_server() -> None:
