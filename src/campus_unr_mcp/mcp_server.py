@@ -421,6 +421,17 @@ def update_forum(
 
 
 @mcp.tool()
+def update_url(cmid: int, external_url: str, dry_run: bool = True) -> str:
+    """Change the destination of a Moodle URL activity.
+
+    Defaults to dry-run. The URL activity keeps its current display name and
+    visibility; only the external destination is changed.
+    """
+    result = _get_client().update_url(cmid, external_url, dry_run=dry_run)
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
 def create_forum_discussion(
     forum_id: int, subject: str, message: str, dry_run: bool = True
 ) -> str:
