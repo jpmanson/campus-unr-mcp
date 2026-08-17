@@ -326,6 +326,23 @@ def forums(course_id: int, as_json: bool) -> None:
 
 
 @main.command()
+@click.argument("cmid", type=int)
+@click.argument("name")
+@click.option("--visible/--hidden", default=True, help="Show or hide the forum for students")
+@click.option("--dry-run/--no-dry-run", default=True, help="Validate without changing Moodle (default)")
+def update_forum(cmid: int, name: str, visible: bool, dry_run: bool) -> None:
+    """Rename a forum and set its visibility."""
+    with _get_client() as c:
+        result = c.update_forum(cmid, name, visible, dry_run=dry_run)
+    if result.get("validated") and dry_run:
+        console.print(f"[yellow]DRY RUN[/yellow] validated forum {cmid}")
+    elif result.get("updated"):
+        console.print(f"[green]Forum {cmid} updated[/green]")
+    else:
+        console.print(f"[red]Error: {result.get('error')}[/red]")
+
+
+@main.command()
 @click.argument("forum_id", type=int)
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 def discussions(forum_id: int, as_json: bool) -> None:

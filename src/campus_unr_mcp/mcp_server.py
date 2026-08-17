@@ -400,6 +400,26 @@ def _ts_to_iso(ts) -> str | None:
 # WRITE TOOLS — dry_run=True by default
 # ========================================
 
+
+@mcp.tool()
+def update_forum(
+    cmid: int, name: str, visible: bool = True, dry_run: bool = True
+) -> str:
+    """Rename a forum and set its visibility.
+
+    This uses Moodle's teacher activity form because the mobile Web Service
+    does not provide forum metadata editing. It defaults to dry-run mode.
+
+    Args:
+        cmid: Course-module ID (from get_course_contents/list_activities).
+        name: New forum name.
+        visible: Whether students can see the forum.
+        dry_run: If True (default), validate without changing Moodle.
+    """
+    result = _get_client().update_forum(cmid, name, visible, dry_run=dry_run)
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
 @mcp.tool()
 def create_forum_discussion(
     forum_id: int, subject: str, message: str, dry_run: bool = True
