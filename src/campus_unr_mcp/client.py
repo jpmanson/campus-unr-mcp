@@ -9,6 +9,7 @@ CLI and MCP layers are pure adapters.
 from __future__ import annotations
 
 import os
+import re
 import ssl
 import time
 import urllib.parse
@@ -19,6 +20,8 @@ from pathlib import Path
 
 import httpx
 from dotenv import dotenv_values
+
+from .moodle_forms import extract_form_data
 
 DEFAULT_BASE_URL = "https://campusv.fceia.unr.edu.ar/"
 DEFAULT_SERVICE = "moodle_mobile_app"
@@ -183,6 +186,88 @@ class CampusClient:
                 f"{data.get('errorcode', '?')} - {data.get('message', '?')}"
             )
         return data
+
+    # -- Moodle web forms (activity administration) --
+
+    def _web_login(self) -> httpx.Client:
+        """Start an authenticated browser-like Moodle session.
+
+        Moodle does not expose activity creation/editing through the mobile WS
+        service, so these operations use the standard teacher form while
+        retaining the same credentials and TLS policy as the REST client.
+        """
+        if not self.config.username or not self.config.password:
+            raise AuthenticationError("Web editing requires CAMPUS_USER and CAMPUS_PASS.")
+        session = httpx.Client(
+            timeout=self.config.timeout,
+            verify=self.config.verify_ssl,
+            follow_redirects=True,
+            headers={"User-Agent": "campus-unr-mcp/0.1"},
+        )
+        login_url = urllib.parse.urljoin(self.config.base_url, "login/index.php")
+        page = session.get(login_url)
+        page.raise_for_status()
+        token_match = re.search(r'<input[^>]*name=["\']logintoken["\'][^>]*>', page.text, re.I)
+        token = ""
+        if token_match:
+            token = dict(re.findall(r'([:\w-]+)=["\']([^"\']*)', token_match.group(0))).get("value", "")
+        response = session.post(
+            login_url,
+            data={"username": self.config.username, "password": self.config.password, "logintoken": token},
+        )
+        response.raise_for_status()
+        if "login/index.php" in str(response.url):
+            session.close()
+            raise AuthenticationError("Moodle web login failed.")
+        return session
+
+    @staticmethod
+    def _activity_post_data(form_data: list[tuple[str, str]], replacements: dict[str, str]) -> list[tuple[str, str]]:
+        """Prepare conservative Moodle activity editor form data.
+
+        Completion and grading controls are omitted because Moodle validates
+        their dependent values server-side. This leaves their current/default
+        values unchanged while making a focused metadata update.
+        """
+        excluded = {"name", "visible", "assessed", "ratingtime", "gradecat", "gradepass"}
+        data = [
+            (key, value)
+            for key, value in form_data
+            if key not in excluded
+            and not key.startswith(("completion", "grade_forum", "scale", "advancedgradingmethod"))
+        ]
+        data.extend(replacements.items())
+        data.extend([("completion", "0"), ("submitbutton2", "Guardar cambios y regresar al curso")])
+        return data
+
+    def update_forum(self, cmid: int, name: str, visible: bool, dry_run: bool = True) -> dict:
+        """Rename a forum and set its visibility using Moodle's teacher form."""
+        if not name.strip():
+            return {"validated": False, "error": "Forum name cannot be empty"}
+        session = self._web_login()
+        try:
+            page = session.get(
+                urllib.parse.urljoin(self.config.base_url, "course/modedit.php"),
+                params={"update": cmid, "return": "1"},
+            )
+            page.raise_for_status()
+            action, form_data = extract_form_data(page.text)
+            result = {"validated": True, "cmid": cmid, "name": name, "visible": visible}
+            if dry_run:
+                return {**result, "dry_run": True}
+            response = session.post(
+                urllib.parse.urljoin(self.config.base_url, "course/" + action.lstrip("/")),
+                content=urllib.parse.urlencode(
+                    self._activity_post_data(form_data, {"name": name, "visible": "1" if visible else "0"})
+                ).encode(),
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            response.raise_for_status()
+            if "course/view.php" not in str(response.url):
+                return {"validated": False, "error": "Moodle did not confirm the forum update"}
+            return {**result, "updated": True}
+        finally:
+            session.close()
 
     # -- High-level convenience methods --
 
