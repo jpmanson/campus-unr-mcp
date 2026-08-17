@@ -269,6 +269,51 @@ class CampusClient:
         finally:
             session.close()
 
+    def update_url(self, cmid: int, external_url: str, dry_run: bool = True) -> dict:
+        """Change the destination of a Moodle URL activity.
+
+        The activity's current name and visibility are preserved. Like forum
+        metadata edits, this submits Moodle's teacher form rather than relying
+        on the limited mobile Web Service.
+        """
+        parsed = urllib.parse.urlparse(external_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return {"validated": False, "error": "external_url must be an http(s) URL"}
+        session = self._web_login()
+        try:
+            page = session.get(
+                urllib.parse.urljoin(self.config.base_url, "course/modedit.php"),
+                params={"update": cmid, "return": "1"},
+            )
+            page.raise_for_status()
+            action, form_data = extract_form_data(page.text)
+            current = dict(form_data)
+            if current.get("modulename") != "url":
+                return {"validated": False, "error": f"Course module {cmid} is not a URL activity"}
+            result = {"validated": True, "cmid": cmid, "external_url": external_url}
+            if dry_run:
+                return {**result, "dry_run": True}
+            replacements = {
+                "name": current["name"],
+                "visible": current.get("visible", "1"),
+            }
+            post_data = [
+                pair for pair in self._activity_post_data(form_data, replacements)
+                if pair[0] != "externalurl"
+            ]
+            post_data.append(("externalurl", external_url))
+            response = session.post(
+                urllib.parse.urljoin(self.config.base_url, "course/" + action.lstrip("/")),
+                content=urllib.parse.urlencode(post_data).encode(),
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            response.raise_for_status()
+            if "course/view.php" not in str(response.url):
+                return {"validated": False, "error": "Moodle did not confirm the URL update"}
+            return {**result, "updated": True}
+        finally:
+            session.close()
+
     # -- High-level convenience methods --
 
     def get_site_info(self) -> dict:

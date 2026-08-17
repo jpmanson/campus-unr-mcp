@@ -12,8 +12,8 @@ Agente Plugins spec 1.0.0 compliant (`plugin.json` + `mcp.json` en la raíz).
 src/campus_unr_mcp/
 ├── __init__.py
 ├── client.py      # CampusClient: login token + Moodle Web Services (read + write)
-├── cli.py         # CLI con click + rich (21 subcomandos)
-└── mcp_server.py  # Servidor MCP stdio (21 tools)
+├── cli.py         # CLI con click + rich (22 subcomandos)
+└── mcp_server.py  # Servidor MCP stdio (22 tools)
 bin/campus-server  # Launcher portable para Agent Plugins
 plugin.json        # Manifest Agent Plugins 1.0.0
 mcp.json           # Config MCP stdio
@@ -92,6 +92,10 @@ Todas las operaciones de escritura tienen `--dry-run` por defecto. Pasar `--no-d
 uv run campus update-forum 121831 "Avisos 2026 C1" --hidden
 uv run campus update-forum 121831 "Avisos 2026 C1" --hidden --no-dry-run
 
+# Cambiar el destino de una actividad URL, conservando nombre y visibilidad
+uv run campus update-url 94155 "https://drive.google.com/file/d/ID/view?usp=sharing"
+uv run campus update-url 94155 "https://drive.google.com/file/d/ID/view?usp=sharing" --no-dry-run
+
 # Crear tema en foro (dry-run por defecto, valida permisos)
 uv run campus post-discussion 7119 "Aviso importante" "<p>Mensaje HTML</p>"
 uv run campus post-discussion 7119 "Aviso" "Mensaje" --no-dry-run   # ejecutar
@@ -149,7 +153,7 @@ hermes mcp test campus_unr
 Reiniciá la sesión CLI / el gateway de Hermes para descubrir las tools
 (en Telegram hace falta reiniciar el gateway).
 
-## Tools MCP disponibles (21 total)
+## Tools MCP disponibles (22 total)
 
 ### Lectura (15)
 
@@ -171,11 +175,12 @@ Reiniciá la sesión CLI / el gateway de Hermes para descubrir las tools
 | `get_course_grades` | Todos los items de calificación del curso |
 | `list_quiz_attempts` | Intentos de un quiz (parcial/examen) |
 
-### Escritura (6) — dry_run=True por defecto
+### Escritura (7) — dry_run=True por defecto
 
 | Tool | Descripción |
 |------|-------------|
 | `update_forum` | Renombrar un foro y mostrarlo/ocultarlo |
+| `update_url` | Cambiar el destino de una actividad URL |
 | `create_forum_discussion` | Crear tema en foro (valida permisos en dry-run) |
 | `reply_forum_post` | Responder a un post existente |
 | `save_assignment_grade` | Cargar nota de TP (0-10) con feedback opcional |
