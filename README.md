@@ -2,7 +2,7 @@
 
 Servidor MCP + CLI para el Campus Virtual FCEIA UNR (Moodle).
 
-Confirmado: el campus virtual https://campusv.fceia.unr.edu.ar/ está basado en **Moodle** (cookie `MoodleSession`, login via `login/token.php`, Web Services REST con 435 funciones disponibles).
+El cliente no está atado a una sola URL: apunta a la instancia que pongas en `CAMPUS_BASE_URL`. Confirmado contra el campus de grado https://campusv.fceia.unr.edu.ar/ (**Moodle**: cookie `MoodleSession`, login via `login/token.php`, Web Services REST) y contra el de posgrado https://posgrado.campusvirtual.fceia.unr.edu.ar/ (mismo protocolo; la cantidad de funciones WS puede diferir entre instancias).
 
 Agente Plugins spec 1.0.0 compliant (`plugin.json` + `mcp.json` en la raíz).
 
@@ -35,6 +35,10 @@ CAMPUS_USER=tu_usuario
 CAMPUS_PASS=tu_password
 CAMPUS_BASE_URL=https://campusv.fceia.unr.edu.ar/
 ```
+
+`CAMPUS_BASE_URL` es la raíz de la instancia Moodle (con `/` final). Credenciales y token son **por instancia**: el usuario de grado no tiene por qué existir en posgrado.
+
+Requisito de la instancia destino: `login/token.php` y `webservice/rest/server.php` habilitados, con el servicio `moodle_mobile_app` (si el login dummy responde `invalidlogin` y no `servicenotavailable`, el servicio está activo).
 
 ## Uso CLI — Lectura
 
@@ -152,6 +156,85 @@ hermes mcp test campus_unr
 
 Reiniciá la sesión CLI / el gateway de Hermes para descubrir las tools
 (en Telegram hace falta reiniciar el gateway).
+
+## Varias instancias Moodle (grado + posgrado)
+
+Un proceso MCP = un `CampusClient` = un `.env`. Las credenciales se leen del cwd del proceso (el clone), no de `config.yaml`. Para usar dos campus a la vez hace falta **dos clones** (cada uno con su `.env`) y **dos entradas** en `mcp_servers`.
+
+```bash
+git clone https://github.com/jpmanson/campus-unr-mcp campus-unr-mcp
+git clone https://github.com/jpmanson/campus-unr-mcp campus-unr-posgrado-mcp
+cd campus-unr-mcp && uv sync
+cd ../campus-unr-posgrado-mcp && uv sync
+```
+
+`.env` del clone de grado:
+
+```env
+CAMPUS_USER=tu_usuario_grado
+CAMPUS_PASS=tu_password_grado
+CAMPUS_BASE_URL=https://campusv.fceia.unr.edu.ar/
+```
+
+`.env` del clone de posgrado:
+
+```env
+CAMPUS_USER=tu_usuario_posgrado
+CAMPUS_PASS=tu_password_posgrado
+CAMPUS_BASE_URL=https://posgrado.campusvirtual.fceia.unr.edu.ar/
+```
+
+Verificar cada uno antes de registrar el MCP:
+
+```bash
+cd /path/to/campus-unr-mcp && uv run campus site-info
+cd /path/to/campus-unr-posgrado-mcp && uv run campus site-info
+```
+
+En `~/.hermes/config.yaml`:
+
+```yaml
+mcp_servers:
+  campus_unr:
+    command: uv
+    args:
+      - --directory
+      - /path/to/campus-unr-mcp
+      - run
+      - campus
+      - serve
+    connect_timeout: 90.0
+    enabled: true
+    timeout: 120
+  campus_posgrado:
+    command: uv
+    args:
+      - --directory
+      - /path/to/campus-unr-posgrado-mcp
+      - run
+      - campus
+      - serve
+    connect_timeout: 90.0
+    enabled: true
+    timeout: 120
+```
+
+O por CLI (confirmar el prompt de guardar config si la conexión inicial falla; `campus serve` habla stdio y el probe de `hermes mcp add` a veces cierra antes):
+
+```bash
+printf 'Y\n' | hermes mcp add campus_unr --command uv \
+  --args --directory /path/to/campus-unr-mcp run campus serve
+printf 'Y\n' | hermes mcp add campus_posgrado --command uv \
+  --args --directory /path/to/campus-unr-posgrado-mcp run campus serve
+hermes config set mcp_servers.campus_unr.timeout 120
+hermes config set mcp_servers.campus_posgrado.timeout 120
+hermes mcp test campus_unr
+hermes mcp test campus_posgrado
+```
+
+Las tools quedan prefijadas por el nombre del server (`mcp_campus_unr_*` vs `mcp_campus_posgrado_*`). Después de agregar servers: `/reload-mcp` en la sesión abierta, o una sesión nueva.
+
+No hace falta un repo GitHub distinto por instancia: el segundo directorio es otro clone del mismo código, solo cambia el `.env` (que está en `.gitignore`).
 
 ## Tools MCP disponibles (22 total)
 
